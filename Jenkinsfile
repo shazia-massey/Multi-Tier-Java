@@ -2,92 +2,103 @@ pipeline {
     agent any
     
     tools {
-        maven 'maven3'
+        maven  'maven3'
     }
     
-    environment {
-        IMAGE_NAME = "adijaiswal/bankapp"
-        TAG = "${env.BUILD_NUMBER}" 
-        SONAR_SCANNER= tool 'sonar-scanner'
+    environment{
+        SCANNER_HOME= tool 'sonar-scanner'
+        IMAGE_NAME = "masseys/bankapp"
+        TAG = "${env.BUILD_NUMBER}"
     }
+    
+    
 
-    stages {       
+    stages {
+        stage('Git Checkout') {
+            steps {
+              git credentialsId: 'git-cred', url: 'https://github.com/shazia-massey/Multi-Tier-Java.git'
+            }
+        }
+        
         stage('Compile') {
             steps {
-                sh "mvn compile"
+              sh "mvn compile"
             }
         }
         
-        stage('Test') {
+        stage('Unit tests') {
             steps {
-                echo 'Hello World'
+                sh "mvn test -DskipTests=true"
             }
         }
         
-        stage('SOnarQube') {
-            steps {
-                withSonarQubeEnv('sonar') {
-                    sh ''' $SONAR_SCANNER/bin/sonar-scanner -Dsonar.projectKey=Multitier -Dsonar.projectName=Multitier \
-                    -Dsonar.java.binaries=target '''
-                }
-            }
-        }
-        
-        stage('Quality Gate Check') {
-            steps {
-                timeout(time: 1, unit: 'HOURS') {
-                    waitForQualityGate abortPipeline: false
-                }
-            }
-        }
-        
-        stage('Trivy FS') {
+        stage('Trivy FS Scan ') {
             steps {
                 sh "trivy fs --format table -o fs.html ."
             }
         }
         
-        stage('Build') {
+        stage('SonarQube Analysis') {
             steps {
-                sh "mvn package -DskipTests=true"
+               withSonarQubeEnv('sonar') {
+                   sh "$SCANNER_HOME/bin/sonar-scanner -Dsonar.projectKey=multitier -Dsonar.projectName=multitier -Dsonar.java.binaries=target"
+               } 
             }
         }
         
-        stage('Publish artifacts') {
+         stage('Quality GateCheck') {
             steps {
-                withMaven(globalMavenSettingsConfig: 'maven-settings', jdk: '', maven: 'maven3', mavenSettingsConfig: '', traceability: true) {
-                    sh "mvn deploy -DskipTests=true"
+              timeout(time: 1, unit: 'HOURS') {
+                     waitForQualityGate abortPipeline: false
+                 }
+            }
+        }
+        
+         stage('Build') {
+            steps {
+              sh "mvn package -DskipTests=true"
+            }
+        }
+        
+         stage('publish To Nexus') {
+            steps {
+              withMaven(globalMavenSettingsConfig: 'maven-settings', jdk: '', maven: 'maven3', mavenSettingsConfig: '', traceability: true) {
+                  sh "mvn deploy -DskipTests=true"
                 }
             }
         }
         
-        stage('Build Docker Image') {
+         stage('Build  Docker Image') {
             steps {
                 script {
-                    withDockerRegistry(credentialsId: 'docker-cred') {
-                        sh "docker build -t ${IMAGE_NAME}:${TAG} ."
-                    }
-                }
+               withDockerRegistry(credentialsId: 'docker-cred') {
+                   sh "docker build -t ${IMAGE_NAME}:${TAG} ."
+                     
+                     }
+                 }
             }
         }
         
-         stage('Trivy SCan Docker Image') {
+         
+        stage('Trivy Image Scan ') {
             steps {
                 sh "trivy image --format table -o image.html ${IMAGE_NAME}:${TAG}"
             }
         }
         
-        stage('Push Docker Image') {
+        
+         stage('Push Docker Image') {
             steps {
                 script {
-                    withDockerRegistry(credentialsId: 'docker-cred') {
-                        sh "docker push ${IMAGE_NAME}:${TAG}"
-                    }
-                }
+               withDockerRegistry(credentialsId: 'docker-cred') {
+                   sh "docker push  ${IMAGE_NAME}:${TAG}"
+                     
+                     }
+                 }
             }
         }
         
-        stage('Update Kubernetes Manifest') {
+         stage('Update Kubernetes Manifest') {
             steps {
                 script {
                     // Replace the Docker image tag in line 58 of the ds.yml file
@@ -98,41 +109,43 @@ pipeline {
             }
         }
         
-        stage('Commit and Push Changes') {
+        
+              
+           stage('Commit and Push Changes') {
     steps {
         script {
             // Use GitHub credentials from Jenkins
             withCredentials([usernamePassword(credentialsId: 'git-cred', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
                 sh """
-                git config --global user.email "your-email@example.com"
-                git config --global user.name "Aditya Jaiswal"
-                git remote set-url origin https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/jaiswaladi246/Multi-Tier-Java.git
-                git pull origin main
+                git config --global user.email "masseys.s123@gmail.com"
+                git config --global user.name "shazia-massey"
+                git remote set-url origin https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/shazia-massey/Multi-Tier-Java.git
+                git pull origin master || git pull origin main
                 git add ds.yml
-                git commit -m "Update image to ${IMAGE_NAME}:${TAG}"
-                git push origin main
+                git commit -m "Update image to masseys/bankapp:6"
+                git push origin HEAD:main || git push origin HEAD:master
                 """
             }
         }
     }
 }
 
-         stage('K8 Deployment') {
+        
+         stage('Deploy To K8') {
             steps {
-                withKubeConfig(caCertificate: '', clusterName: 'devopsshack-cluster', contextName: '', credentialsId: 'k8-cred', namespace: 'webapps', restrictKubeConfigAccess: false, serverUrl: 'https://761EA1E7FE48A0FB44798AAB35344BB7.gr7.ap-south-1.eks.amazonaws.com') {
-                        sh "kubectl apply -f ds.yml -n webapps"
-                        sleep 30
-                    }
+              withKubeConfig(caCertificate: '', clusterName: 'devopsshack-cluster', contextName: '', credentialsId: 'k8-token', namespace: 'webapps', restrictKubeConfigAccess: false, serverUrl: 'https://3F5E779C7DF69C01E718C3A9E1325FF8.gr7.us-east-1.eks.amazonaws.com') {
+                     sh " kubectl apply -f ds.yml"
+                     sleep 30
+                }
             }
         }
         
-        stage('Verify K8 Deployment') {
+         stage('Verify k8 Deployment') {
             steps {
-                withKubeConfig(caCertificate: '', clusterName: 'devopsshack-cluster', contextName: '', credentialsId: 'k8-cred', namespace: 'webapps', restrictKubeConfigAccess: false, serverUrl: 'https://761EA1E7FE48A0FB44798AAB35344BB7.gr7.ap-south-1.eks.amazonaws.com') {
-                        sh "kubectl get pods -n webapps"
-                        sh "kubectl get svc -n webapps"
-                       
-                    }
+              withKubeConfig(caCertificate: '', clusterName: 'devopsshack-cluster', contextName: '', credentialsId: 'k8-token', namespace: 'webapps', restrictKubeConfigAccess: false, serverUrl: 'https://3F5E779C7DF69C01E718C3A9E1325FF8.gr7.us-east-1.eks.amazonaws.com') {
+                     sh "kubectl get pods -n webapps"
+                     sh "kubectl get svc -n webapps"
+                }
             }
         }
     }
